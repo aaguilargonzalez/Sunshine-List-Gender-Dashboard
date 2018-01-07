@@ -1,0 +1,278 @@
+---
+title: "Ontario Sunshine List Gender Parity 2012-2016"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    theme: bootstrap
+    social: menu
+    source_code: embed
+runtime: shiny
+---
+
+<style>                     
+.navbar {
+  background-color: #00c29d;
+  border-color: #e7e7e7;
+}
+.navbar-brand {
+color: white!important;
+}
+</style>  
+
+```{r setup, include=FALSE}
+#-----------------------------------#
+#           Libraries               #
+#-----------------------------------#
+
+library(flexdashboard)
+library(readr)
+library(plotly)
+library(dplyr)
+library(ggplot2)
+library(formattable)
+```
+
+```{r global, include=FALSE}
+#-----------------------------------#
+#          Import Data              #
+#-----------------------------------#
+
+# load data in 'global' chunk so it can be shared by all users of the dashboard
+sl_data <- read_csv("./Data/Sunshine_List_Conf.csv")
+
+```
+
+Inputs {.sidebar}
+-----------------------------------------------------------------------
+
+```{r}
+#-----------------------------------#
+#          User Inputs              #
+#-----------------------------------#
+
+# All possible government sectors
+selectInput("sector_select", label = "Sector(s):",
+            choices = c(unique(sl_data$sector)), multiple = TRUE)
+
+```
+
+```{r setupfunctions, include=FALSE}
+
+# Dynamically update the possible employers based on
+# user-selected sectors
+output$employee_choices <- renderUI({
+  if (is.null(input$sector_select)) {
+    selectInput("employer_select", label = "Organization(s):", choices = c(unique(sl_data$employer)), multiple = TRUE)
+  } else {
+    employer_choices <- unique(sl_data[sl_data$sector %in% input$sector_select, "employer"])
+  selectInput("employer_select", label = "Organization(s):", choices = c(employer_choices), multiple = TRUE)
+  }
+})
+
+```
+
+```{r}
+uiOutput("employee_choices")
+```
+
+</br>
+Note: Gender for employees are predicted using a Gradient Boosting Decision Tree model.
+
+Row
+-----------------------------------------------------------------------
+
+### Employee Gender Split (latest year avaliable)
+
+```{r}
+#-----------------------------------#
+#          Donut Chart              #
+#-----------------------------------#
+
+ChartA_data <- reactive({
+  if (is.null(input$employer_select)){
+  sl_data %>%
+  filter(sector %in% input$sector_select) %>%
+  # Use only the latest year
+  filter(year == max(year)) %>%
+  group_by(gender) %>%
+  summarize(count = n()) 
+} else {
+  sl_data %>%
+  filter(employer %in% input$employer_select) %>%
+  filter(year == max(year)) %>%
+  group_by(gender) %>%
+  summarize(count = n())
+}
+})
+
+renderPlotly({
+  plot_ly(ChartA_data(),labels = ~gender, values = ~count,
+          # Set colours manually
+          marker = list(colors = c('rgb(255,120,0)',   'rgb(0,115,186)')),
+          textposition = 'inside',
+          textinfo = 'percent',
+          insidetextfont = list(color = '#FFFFFF'),
+          # Custom hover text
+          hoverinfo = 'text',
+          text = ~paste('</br> Gender: ', gender,
+                        '</br> Count: ', count)) %>%
+  add_pie(hole = 0.6) %>%
+  # Simplify layout
+  layout(showlegend = F,
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE)) %>%
+# Disable Plotly toolbar
+config(displayModeBar = F)
+})
+
+```
+
+### Average Salary by Gender (latest year avaliable)
+
+```{r}
+#-----------------------------------#
+#         Column Chart              #
+#-----------------------------------#
+
+ChartB_data <- reactive({
+  if (is.null(input$employer_select)){
+  sl_data %>%
+  filter(sector %in% input$sector_select) %>%
+  filter(year == max(year)) %>%
+  group_by(gender) %>%
+  summarize(total_renum = sum(salary),
+            count = n()) %>%
+  mutate(avg_salary = total_renum/count) %>%
+  # Format average salary into a nice looking string
+  mutate(total_dollar = as.character(currency(avg_salary, digits=0L)))   %>%
+  mutate(avg_salary_placement = avg_salary*0.95)
+  } else{
+  sl_data %>%
+  filter(employer %in% input$employer_select) %>%
+  filter(year == max(year)) %>%
+  group_by(gender) %>%
+  summarize(total_renum = sum(salary),
+            count = n()) %>%
+  mutate(avg_salary = total_renum/count) %>%
+  mutate(total_dollar = as.character(currency(avg_salary, digits=0L)))   %>%
+  mutate(avg_salary_placement = avg_salary*0.95)
+  }
+})
+
+renderPlotly({
+plot_ly(ChartB_data(), x = ~gender, y = ~avg_salary, type = 'bar',
+             marker = list(color = c('rgb(255,120,0)', 'rgb(0,115,186)')),
+             hoverinfo = 'text',
+             text = ~paste('</br> Gender: ', gender,
+                           '</br> Count: ', count)) %>%
+        layout(showlegend = F,
+          xaxis = list(title = "", showticklabels = FALSE, zeroline = FALSE),
+          yaxis = list(title = "", zeroline = FALSE)) %>%
+    # Add column labels
+    add_annotations(text = ChartB_data()$total_dollar,
+                  x = ChartB_data()$gender,
+                  y = ChartB_data()$avg_salary_placement,
+                  xref = "x",
+                  yref = "y",
+                  font = list(color = '#FFFFFF'),
+                  showarrow=FALSE) %>% 
+config(displayModeBar = F)
+})
+
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Employee Gender Split Over Time (all avaliable years)
+
+```{r}
+#-----------------------------------#
+#           Line Chart              #
+#-----------------------------------#
+
+# Each chart element should be its own column in dataframe
+
+# Get employee count by gender, year
+gender_year_counts <- reactive({
+  if (is.null(input$employer_select)){
+  sl_data %>%
+  filter(sector %in% input$sector_select) %>%
+  group_by(gender, year) %>%
+  summarize(count = n())
+  } else{
+  sl_data %>%
+  filter(employer %in% input$employer_select) %>%
+  group_by(gender, year) %>%
+  summarize(count = n())
+  }
+})
+
+# Get employee count by year
+total_year_counts <- reactive({
+  if (is.null(input$employer_select)){
+  sl_data %>%
+  filter(sector %in% input$sector_select) %>%
+  group_by(year) %>%
+  summarize(count = n()) 
+  } else{
+  sl_data %>%
+  filter(employer %in% input$employer_select) %>%
+  group_by(year) %>%
+  summarize(count = n())
+  }
+})
+
+# Merge employee count by gender, year with count by year
+year_count_merge <- reactive({
+  gender_year_counts() %>%
+  left_join(total_year_counts(), by='year', suffix=c('_gender', '_total')) 
+})
+
+# Calculate share of employees by gender
+# Create distinct chart elements as columns
+female_share <- reactive({
+  year_count_merge() %>%
+  filter(gender == 'female') %>%
+  mutate(female_share = round(count_gender/count_total,2),
+         female_gender = 'female') %>%
+  rename(female_count = count_gender) %>%
+  ungroup() %>%
+  select(year, female_gender,female_share, female_count)
+})
+ 
+male_share <- reactive({
+  year_count_merge() %>%
+  filter(gender == 'male') %>%
+  mutate(male_share = round(count_gender/count_total,2),
+         male_gender = 'male') %>%
+  rename(male_count = count_gender) %>%
+  ungroup() %>%
+  select(year, male_gender,male_share, male_count) 
+})
+
+# Final chart dataframe
+ChartC_data <- reactive({
+   male_share() %>%
+   left_join(female_share(), by='year')
+})
+
+renderPlotly({
+  # Male Gender Share
+  plot_ly(ChartC_data(), x = ~year, y = ~male_share, name = 'male', type = 'scatter', mode = 'lines+markers',
+             hoverinfo='text',
+             text = ~paste('</br> Gender: ', male_gender,
+                           '</br> Count: ', male_count,
+                           '</br> Share: ', male_share)) %>%
+  # Female Gender Share
+  add_trace(y = ~female_share, name = 'female', mode = 'lines+markers', hoverinfo='text',
+            text = ~paste('</br> Gender: ', female_gender,
+                          '</br> Count: ', female_count,
+                          '</br> Share: ', female_share)) %>%
+  layout(showlegend = F,
+         xaxis = list(title = "", showticklabels = TRUE, zeroline = FALSE, tickmode = 'array', tickvals = ~year, ticktext = ~year),
+         yaxis = list(title = "", zeroline = FALSE)) %>%
+  config(displayModeBar = F)
+})
+
+```
